@@ -49,6 +49,7 @@ services:
 
   bombardier:
     image: ghcr.io/andrsuh/bombardier:${BOMBARDIER_VERSION:-latest}
+    pull_policy: always
     ports:
       - "1234:1234"
     restart: unless-stopped
