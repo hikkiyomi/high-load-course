@@ -39,14 +39,14 @@ class PaymentExternalSystemAdapterImpl(
     private val client = OkHttpClient.Builder().build()
 
     private var rateLimiter: SlidingWindowRateLimiter
-    private var ongoingWindow: OngoingWindow
+    private var inflightLimiter: OngoingWindow
 
     init {
         val parsedRateLimit = rateLimitPerSec.toLong()
         val duration = Duration.ofSeconds(1)
 
         rateLimiter = SlidingWindowRateLimiter(parsedRateLimit, duration)
-        ongoingWindow = OngoingWindow(parallelRequests)
+        inflightLimiter = OngoingWindow(parallelRequests)
     }
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
@@ -63,7 +63,7 @@ class PaymentExternalSystemAdapterImpl(
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
         try {
-            ongoingWindow.acquire()
+            inflightLimiter.acquire()
 
             while (!rateLimiter.tick()) {}
 
@@ -72,12 +72,7 @@ class PaymentExternalSystemAdapterImpl(
                 post(emptyBody)
             }.build()
 
-            val clientWithTimeout = client
-                    .newBuilder()
-                    .callTimeout(Duration.ofMillis(deadline - paymentStartedAt))
-                    .build()
-
-            clientWithTimeout
+            client
                 .newCall(request)
                 .execute()
                 .use { response ->
@@ -114,7 +109,7 @@ class PaymentExternalSystemAdapterImpl(
                 }
             }
         } finally {
-            ongoingWindow.release()
+            inflightLimiter.release()
         }
     }
 
