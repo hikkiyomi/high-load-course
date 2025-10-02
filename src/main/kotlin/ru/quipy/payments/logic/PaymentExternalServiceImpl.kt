@@ -5,25 +5,24 @@ import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
-import ru.quipy.common.utils.CompositeRateLimiter
 import ru.quipy.common.utils.LeakingBucketRateLimiter
 import ru.quipy.common.utils.OngoingWindow
 import ru.quipy.common.utils.RateLimiter
 import ru.quipy.common.utils.SlidingWindowRateLimiter
-import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
 import java.time.Duration
-import java.util.UUID
+import java.util.*
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
-import kotlin.Int
+import kotlin.concurrent.thread
 
 
 data class PaymentRequest(
@@ -57,36 +56,31 @@ class PaymentExternalSystemAdapterImpl(
 
     private val client = OkHttpClient.Builder().build()
 
-    private var rateLimiter: RateLimiter
-    private var ongoingWindow: OngoingWindow
+    private var rateLimiter: RateLimiter = SlidingWindowRateLimiter(
+        rateLimitPerSec.toLong(),
+        Duration.ofSeconds(1),
+    )
+    private var ongoingWindow: OngoingWindow = OngoingWindow(parallelRequests)
 
     private val requestQueue = Channel<PaymentRequest>(Channel.UNLIMITED)
 
-    init {
-        rateLimiter = TokenBucketRateLimiter(
-            parallelRequests,
-            parallelRequests,
-            requestAverageProcessingTime.toMillis(),
-            TimeUnit.MILLISECONDS,
-        )
+    private val threadPool = ThreadPoolExecutor(
+        parallelRequests,
+        parallelRequests,
+        60L,
+        TimeUnit.SECONDS,
+        LinkedBlockingQueue(),
+    )
 
-        ongoingWindow = OngoingWindow(parallelRequests)
+    override fun performPaymentAsync(
+        paymentId: UUID,
+        amount: Int,
+        paymentStartedAt: Long,
+        deadline: Long,
+    ) {
+        threadPool.submit {
+            logger.warn("[$accountName] Submitting payment request for payment $paymentId")
 
-        val scope = CoroutineScope(Dispatchers.IO)
-
-        repeat(parallelRequests) {
-            scope.launch {
-                processPaymentAsync()
-            }
-        }
-    }
-
-    private suspend fun processPaymentAsync() {
-        for (request in requestQueue) {
-            val paymentId = request.paymentId
-            val amount = request.amount
-            val paymentStartedAt = request.paymentStartedAt
-            val deadline = request.deadline
             val transactionId = UUID.randomUUID()
 
             // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
@@ -98,38 +92,23 @@ class PaymentExternalSystemAdapterImpl(
             logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
             try {
-                val retries = 3
-                var got = false
-                var delay = 100
-
-                for (i in 1..retries) {
-                    if (rateLimiter.tick()) {
-                        got = true
-                        break
-                    } else {
-                        delay(delay + (Math.random() * delay).toLong())
-                        delay *= 2
-                    }
-                }
-
-                // do load shedding
-                if (!got) {
-                    throw Exception("no available tokens for this request")
-                }
-
                 ongoingWindow.acquire()
+
+                if (!rateLimiter.tick()) {
+                    throw Exception("rate limited")
+                }
 
                 val request = Request.Builder().run {
                     url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
                     post(emptyBody)
                 }.build()
 
-                val clientWithTimeout = client
-                    .newBuilder()
-                    .callTimeout(deadline - now(), TimeUnit.MILLISECONDS)
-                    .build()
+                // val clientWithTimeout = client
+                //     .newBuilder()
+                //     .callTimeout(deadline - now(), TimeUnit.MILLISECONDS)
+                //     .build()
 
-                clientWithTimeout
+                client
                     .newCall(request)
                     .execute()
                     .use { response ->
@@ -167,27 +146,8 @@ class PaymentExternalSystemAdapterImpl(
                 }
             } finally {
                 ongoingWindow.release()
-                request.callback(now() - paymentStartedAt)
             }
         }
-    }
-
-    override suspend fun performPaymentAsync(
-        paymentId: UUID,
-        amount: Int,
-        paymentStartedAt: Long,
-        deadline: Long,
-        callback: (Long) -> Unit,
-    ) {
-        logger.warn("[$accountName] Submitting payment request for payment $paymentId")
-
-        requestQueue.send(PaymentRequest(
-            paymentId = paymentId,
-            amount = amount,
-            paymentStartedAt = paymentStartedAt,
-            deadline = deadline,
-            callback = callback,
-        ))
     }
 
     override fun price() = properties.price

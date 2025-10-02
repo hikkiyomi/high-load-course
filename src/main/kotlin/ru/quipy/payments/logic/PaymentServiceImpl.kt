@@ -17,16 +17,12 @@ class PaymentSystemImpl(
 
     override fun submitPaymentRequest(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         for (account in paymentAccounts) {
-            runBlocking {
-                account.performPaymentAsync(
-                    paymentId,
-                    amount,
-                    paymentStartedAt,
-                    deadline,
-                ) { millis ->
-                    paymentMetrics.observeRequestDuration(millis)
-                }
-            }
+            account.performPaymentAsync(
+                paymentId,
+                amount,
+                paymentStartedAt,
+                deadline,
+            )
         }
     }
 }
