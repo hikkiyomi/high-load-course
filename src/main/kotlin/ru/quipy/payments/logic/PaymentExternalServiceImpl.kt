@@ -2,15 +2,10 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
-import ru.quipy.common.utils.LeakingBucketRateLimiter
 import ru.quipy.common.utils.OngoingWindow
 import ru.quipy.common.utils.RateLimiter
 import ru.quipy.common.utils.SlidingWindowRateLimiter
@@ -22,16 +17,9 @@ import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
-import kotlin.concurrent.thread
 
-
-data class PaymentRequest(
-    val paymentId: UUID,
-    val amount: Int,
-    val paymentStartedAt: Long,
-    val deadline: Long,
-    val callback: (Long) -> Unit,
-)
+class RateLimitedException(val retryAfter: Long)
+    : Exception("Rate limited, repeat after $retryAfter")
 
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
@@ -61,8 +49,6 @@ class PaymentExternalSystemAdapterImpl(
         Duration.ofSeconds(1),
     )
     private var ongoingWindow: OngoingWindow = OngoingWindow(parallelRequests)
-
-    private val requestQueue = Channel<PaymentRequest>(Channel.UNLIMITED)
 
     private val threadPool = ThreadPoolExecutor(
         parallelRequests,
@@ -95,7 +81,7 @@ class PaymentExternalSystemAdapterImpl(
                 ongoingWindow.acquire()
 
                 if (!rateLimiter.tick()) {
-                    throw Exception("rate limited")
+                    throw RateLimitedException(1)
                 }
 
                 val request = Request.Builder().run {
