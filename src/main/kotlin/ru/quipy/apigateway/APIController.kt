@@ -69,6 +69,8 @@ class APIController {
             val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
             return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
         } catch (e: RateLimitedException) {
+            logger.error("retrying after ${e.retryAfter} seconds...")
+
             return ResponseEntity
                 .status(HttpStatus.TOO_MANY_REQUESTS)
                 .header("Retry-After", "${e.retryAfter}")

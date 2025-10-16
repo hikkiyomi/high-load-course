@@ -19,7 +19,7 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 class RateLimitedException(val retryAfter: Long)
-    : Exception("Rate limited, repeat after $retryAfter")
+    : Exception("Rate limited, retry after $retryAfter seconds.")
 
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
@@ -64,6 +64,10 @@ class PaymentExternalSystemAdapterImpl(
         paymentStartedAt: Long,
         deadline: Long,
     ) {
+        if (!rateLimiter.tick()) {
+            throw RateLimitedException((requestAverageProcessingTime.toMillis() + 999) / 1000)
+        }
+
         threadPool.submit {
             logger.warn("[$accountName] Submitting payment request for payment $paymentId")
 
@@ -79,10 +83,6 @@ class PaymentExternalSystemAdapterImpl(
 
             try {
                 ongoingWindow.acquire()
-
-                if (!rateLimiter.tick()) {
-                    throw RateLimitedException(1)
-                }
 
                 val request = Request.Builder().run {
                     url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
