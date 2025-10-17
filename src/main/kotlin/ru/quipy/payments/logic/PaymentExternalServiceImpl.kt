@@ -17,6 +17,7 @@ import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import kotlin.math.min
 
 class RateLimitedException(val retryAfter: Long)
     : Exception("Rate limited, retry after $retryAfter seconds.")
@@ -44,10 +45,11 @@ class PaymentExternalSystemAdapterImpl(
 
     private val client = OkHttpClient.Builder().build()
 
-    private var rateLimiter: RateLimiter = SlidingWindowRateLimiter(
+    private var rateLimiter: SlidingWindowRateLimiter = SlidingWindowRateLimiter(
         rateLimitPerSec.toLong(),
         Duration.ofSeconds(1),
     )
+
     private var ongoingWindow: OngoingWindow = OngoingWindow(parallelRequests)
 
     private val threadPool = ThreadPoolExecutor(
@@ -64,7 +66,12 @@ class PaymentExternalSystemAdapterImpl(
         paymentStartedAt: Long,
         deadline: Long,
     ) {
-        if (!rateLimiter.tick()) {
+        val plainRateLimit = rateLimitPerSec.toLong()
+        val inflightRequestRateLimit = parallelRequests * 1000 / requestAverageProcessingTime.toMillis()
+        val realRateLimit = min(plainRateLimit, inflightRequestRateLimit)
+        val estimatedTimeWaiting = (threadPool.queue.size * requestAverageProcessingTime.toMillis()) / realRateLimit
+
+        if (now() + estimatedTimeWaiting > deadline) {
             throw RateLimitedException((requestAverageProcessingTime.toMillis() + 999) / 1000)
         }
 
@@ -83,6 +90,7 @@ class PaymentExternalSystemAdapterImpl(
 
             try {
                 ongoingWindow.acquire()
+                rateLimiter.tickBlocking()
 
                 val request = Request.Builder().run {
                     url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
