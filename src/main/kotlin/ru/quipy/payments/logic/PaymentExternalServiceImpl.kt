@@ -69,10 +69,10 @@ class PaymentExternalSystemAdapterImpl(
         val plainRateLimit = rateLimitPerSec.toLong()
         val inflightRequestRateLimit = parallelRequests * 1000 / requestAverageProcessingTime.toMillis()
         val realRateLimit = min(plainRateLimit, inflightRequestRateLimit)
-        val estimatedTimeWaiting = (threadPool.queue.size * requestAverageProcessingTime.toMillis()) / realRateLimit
+        val estimatedTimeWaiting = threadPool.queue.size / realRateLimit * 1000
 
         if (now() + estimatedTimeWaiting > deadline) {
-            throw RateLimitedException((requestAverageProcessingTime.toMillis() + 999) / 1000)
+            throw RateLimitedException((estimatedTimeWaiting + 999) / 1000)
         }
 
         threadPool.submit {
