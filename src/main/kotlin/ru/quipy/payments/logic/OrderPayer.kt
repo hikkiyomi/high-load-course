@@ -9,6 +9,7 @@ import ru.quipy.common.utils.CompositeRateLimiter
 import ru.quipy.common.utils.LeakingBucketRateLimiter
 import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.common.utils.SlidingWindowRateLimiter
+import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.awt.Composite
@@ -45,15 +46,15 @@ class OrderPayer {
         CallerBlockingRejectedExecutionHandler()
     )
 
-    private val leakyBucket =
-            LeakingBucketRateLimiter(
-                11,
-                Duration.ofSeconds(1),
-                660,
-            )
+    private val tokenBucket = TokenBucketRateLimiter(
+        11,
+        30,
+        1,
+        TimeUnit.SECONDS,
+    )
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
-        if (!leakyBucket.tick()) {
+        if (!tokenBucket.tick()) {
             throw RateLimitedException(30)
         }
 
