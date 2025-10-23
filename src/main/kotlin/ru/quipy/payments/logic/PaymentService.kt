@@ -17,12 +17,11 @@ interface PaymentService {
 
  */
 interface PaymentExternalSystemAdapter {
-    suspend fun performPaymentAsync(
+    fun performPaymentAsync(
         paymentId: UUID,
         amount: Int,
         paymentStartedAt: Long,
         deadline: Long,
-        callback: (Long) -> Unit,
     )
 
     fun name(): String
