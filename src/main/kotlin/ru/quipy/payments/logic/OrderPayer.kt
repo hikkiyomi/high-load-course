@@ -46,19 +46,13 @@ class OrderPayer {
         CallerBlockingRejectedExecutionHandler()
     )
 
-    private val tokenBucket = TokenBucketRateLimiter(
-        11,
-        11,
-        1,
-        TimeUnit.SECONDS,
-    )
-
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
-        if (!tokenBucket.tick()) {
+        val createdAt = System.currentTimeMillis()
+        val estimatedWaitingTime = (ceil(paymentExecutor.queue.size / 11.0) * 1.1 + 1).toLong() * 1000
+
+        if (createdAt + estimatedWaitingTime >= deadline) {
             throw RateLimitedException(30)
         }
-
-        val createdAt = System.currentTimeMillis()
 
         paymentExecutor.submit {
             val createdEvent = paymentESService.create {
