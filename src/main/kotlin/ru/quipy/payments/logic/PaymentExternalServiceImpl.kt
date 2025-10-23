@@ -7,7 +7,6 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.OngoingWindow
-import ru.quipy.common.utils.RateLimiter
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
@@ -17,6 +16,7 @@ import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import kotlin.math.ceil
 import kotlin.math.min
 
 class RateLimitedException(val retryAfter: Long)
@@ -66,13 +66,15 @@ class PaymentExternalSystemAdapterImpl(
         paymentStartedAt: Long,
         deadline: Long,
     ) {
-        val plainRateLimit = rateLimitPerSec.toLong()
-        val inflightRequestRateLimit = parallelRequests * 1000 / requestAverageProcessingTime.toMillis()
+        val plainRateLimit = rateLimitPerSec.toDouble()
+        val inflightRequestRateLimit = parallelRequests * 1000.0 / requestAverageProcessingTime.toMillis()
         val realRateLimit = min(plainRateLimit, inflightRequestRateLimit)
-        val estimatedTimeWaiting = threadPool.queue.size / realRateLimit * 1000
 
-        if (now() + estimatedTimeWaiting > deadline) {
-            throw RateLimitedException((estimatedTimeWaiting + 999) / 1000)
+        val estimatedTimeWaiting = threadPool.queue.size / realRateLimit * 2000 +
+                2 * requestAverageProcessingTime.toMillis()
+
+        if (now() + estimatedTimeWaiting >= deadline) {
+            throw RateLimitedException(ceil(estimatedTimeWaiting / 1000).toLong())
         }
 
         threadPool.submit {
