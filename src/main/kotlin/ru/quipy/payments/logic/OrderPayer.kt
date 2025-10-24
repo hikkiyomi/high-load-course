@@ -64,10 +64,7 @@ class OrderPayer {
 
         if (!rateLimiter.tick()) {
             val estimatedWaitingTime = (ceil(paymentExecutor.queue.size / 11.0) * 1.1 + 1).toLong() * 1000
-
-            if (createdAt + estimatedWaitingTime >= deadline) {
-                throw RateLimitedException(estimatedWaitingTime)
-            }
+            throw RateLimitedException(estimatedWaitingTime)
         }
 
         paymentExecutor.submit {
