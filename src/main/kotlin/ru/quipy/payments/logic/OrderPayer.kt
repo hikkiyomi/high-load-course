@@ -46,12 +46,28 @@ class OrderPayer {
         CallerBlockingRejectedExecutionHandler()
     )
 
+    private val rateLimiter =
+        CompositeRateLimiter(
+            LeakingBucketRateLimiter(
+                11,
+                Duration.ofSeconds(1),
+                330,
+            ),
+            SlidingWindowRateLimiter(
+                11,
+                Duration.ofSeconds(1),
+            ),
+        )
+
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
-        val estimatedWaitingTime = (ceil(paymentExecutor.queue.size / 11.0) * 1.1 + 1).toLong() * 1000
 
-        if (createdAt + estimatedWaitingTime >= deadline) {
-            throw RateLimitedException(30)
+        if (!rateLimiter.tick()) {
+            val estimatedWaitingTime = (ceil(paymentExecutor.queue.size / 11.0) * 1.1 + 1).toLong() * 1000
+
+            if (createdAt + estimatedWaitingTime >= deadline) {
+                throw RateLimitedException(estimatedWaitingTime)
+            }
         }
 
         paymentExecutor.submit {
