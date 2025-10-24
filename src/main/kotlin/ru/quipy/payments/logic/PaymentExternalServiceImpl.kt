@@ -56,7 +56,6 @@ class PaymentExternalSystemAdapterImpl(
 
         try {
             ongoingWindow.acquire()
-            slidingWindow.tickBlocking()
 
             val request = Request.Builder().run {
                 url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
