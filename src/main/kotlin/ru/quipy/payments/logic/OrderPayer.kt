@@ -63,7 +63,7 @@ class OrderPayer {
         val createdAt = System.currentTimeMillis()
 
         if (!rateLimiter.tick()) {
-            val estimatedWaitingTime = (ceil(paymentExecutor.queue.size / 11.0) * 1.1 + 1).toLong() * 1000
+            val estimatedWaitingTime = (ceil(paymentExecutor.queue.size / 11.0) * 1.1 + 1).toLong()
             throw RateLimitedException(estimatedWaitingTime)
         }
 
