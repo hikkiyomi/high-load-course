@@ -56,8 +56,7 @@ class OrderPayer {
         val createdAt = System.currentTimeMillis()
 
         if (!leakyBucket.tick()) {
-            val estimatedWaitingTime = (ceil(paymentExecutor.queue.size / 11.0) * 1.1 + 1).toLong() * 1000
-            throw RateLimitedException(estimatedWaitingTime / 1000)
+            throw RateLimitedException(30)
         }
 
         paymentExecutor.submit {
