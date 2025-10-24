@@ -46,18 +46,16 @@ class OrderPayer {
         CallerBlockingRejectedExecutionHandler()
     )
 
-    private val leakyBucket = LeakingBucketRateLimiter(
+    private val slidingWindow = SlidingWindowRateLimiter(
         11,
         Duration.ofSeconds(1),
-        270,
     )
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
 
-        if (!leakyBucket.tick()) {
-            val estimatedWaitingTime = (ceil(paymentExecutor.queue.size / 11.0) * 1.1 + 1).toLong() * 1000
-            throw RateLimitedException(estimatedWaitingTime / 1000)
+        if (!slidingWindow.tick()) {
+            throw RateLimitedException(1)
         }
 
         paymentExecutor.submit {

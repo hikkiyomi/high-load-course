@@ -39,11 +39,6 @@ class PaymentExternalSystemAdapterImpl(
 
     private val client = OkHttpClient.Builder().build()
 
-    private val slidingWindow = SlidingWindowRateLimiter(
-        11,
-        Duration.ofSeconds(1),
-    )
-
     private val ongoingWindow: OngoingWindow = OngoingWindow(parallelRequests)
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
