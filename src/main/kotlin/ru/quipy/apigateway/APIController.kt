@@ -70,6 +70,8 @@ class APIController {
             return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
         }
         catch (e: RateLimitedException) {
+            logger.warn("retrying after ${e.retryAfter}")
+
             return ResponseEntity
                 .status(HttpStatus.TOO_MANY_REQUESTS)
                 .header("Retry-After", "${e.retryAfter}")

@@ -55,7 +55,8 @@ class OrderPayer {
         val createdAt = System.currentTimeMillis()
 
         if (!slidingWindow.tick()) {
-            throw RateLimitedException(1)
+            val estimatedWaitingTime = (ceil(paymentExecutor.queue.size / 11.0) * 1000 + 1000).toLong()
+            throw RateLimitedException(now() + estimatedWaitingTime)
         }
 
         paymentExecutor.submit {

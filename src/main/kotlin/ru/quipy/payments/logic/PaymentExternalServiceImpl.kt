@@ -41,6 +41,11 @@ class PaymentExternalSystemAdapterImpl(
 
     private val ongoingWindow: OngoingWindow = OngoingWindow(parallelRequests)
 
+    private val slidingWindow = SlidingWindowRateLimiter(
+        rateLimitPerSec.toLong(),
+        Duration.ofSeconds(1),
+    )
+
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
 
@@ -56,6 +61,7 @@ class PaymentExternalSystemAdapterImpl(
 
         try {
             ongoingWindow.acquire()
+            slidingWindow.tickBlocking()
 
             val request = Request.Builder().run {
                 url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
