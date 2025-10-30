@@ -5,13 +5,23 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
 import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
+import ru.quipy.common.utils.CompositeRateLimiter
+import ru.quipy.common.utils.LeakingBucketRateLimiter
 import ru.quipy.common.utils.NamedThreadFactory
+import ru.quipy.common.utils.SlidingWindowRateLimiter
+import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
+import java.awt.Composite
+import java.time.Duration
 import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import kotlin.math.ceil
+
+class RateLimitedException(val retryAfter: Long)
+    : Exception("Rate limited, retry after $retryAfter seconds.")
 
 @Service
 class OrderPayer {
@@ -36,10 +46,21 @@ class OrderPayer {
         CallerBlockingRejectedExecutionHandler()
     )
 
+    private val tokenBucket = TokenBucketRateLimiter(
+        11,
+        30,
+        1,
+        TimeUnit.SECONDS,
+    )
+
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
+        if (!tokenBucket.tick()) {
+            throw RateLimitedException(30)
+        }
+
         val createdAt = System.currentTimeMillis()
 
-        val future = paymentExecutor.submit {
+        paymentExecutor.submit {
             val createdEvent = paymentESService.create {
                 it.create(
                     paymentId,
@@ -50,14 +71,6 @@ class OrderPayer {
             logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
 
             paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
-        }
-
-        try {
-            future.get()
-        } catch (e: Exception) {
-            e.cause?.let {
-                throw it
-            }
         }
 
         return createdAt
