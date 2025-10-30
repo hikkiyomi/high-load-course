@@ -20,8 +20,6 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import kotlin.math.ceil
 
-class RateLimitedException(val retryAfter: Long)
-    : Exception("Rate limited, retry after $retryAfter seconds.")
 
 @Service
 class OrderPayer {
@@ -46,8 +44,11 @@ class OrderPayer {
         CallerBlockingRejectedExecutionHandler()
     )
 
+    private val outgoingRps = 10.0
+    private val reqProcessingTime = 2000
+
     private val slidingWindow = SlidingWindowRateLimiter(
-        11,
+        10,
         Duration.ofSeconds(1),
     )
 
@@ -55,10 +56,14 @@ class OrderPayer {
         val createdAt = System.currentTimeMillis()
 
         if (!slidingWindow.tick()) {
-            throw RateLimitedException(1)
+            val estimatedWaitingTime = (ceil(paymentExecutor.queue.size / outgoingRps) + reqProcessingTime).toLong()
+
+            if (createdAt + estimatedWaitingTime > deadline) {
+                throw ShouldRetryException(createdAt + estimatedWaitingTime)
+            }
         }
 
-        paymentExecutor.submit {
+        val future = paymentExecutor.submit {
             val createdEvent = paymentESService.create {
                 it.create(
                     paymentId,
@@ -69,6 +74,14 @@ class OrderPayer {
             logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
 
             paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
+        }
+
+        try {
+            future.get()
+        } catch (e: Exception) {
+            e.cause?.let {
+                throw it
+            }
         }
 
         return createdAt

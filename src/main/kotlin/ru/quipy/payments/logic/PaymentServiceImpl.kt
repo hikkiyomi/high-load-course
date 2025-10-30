@@ -20,7 +20,9 @@ class PaymentSystemImpl(
                 amount,
                 paymentStartedAt,
                 deadline,
-            )
+            ) { timestamp ->
+                paymentMetrics.observeRequestDuration(timestamp - paymentStartedAt)
+            }
         }
     }
 }
