@@ -46,6 +46,9 @@ class OrderPayer {
         CallerBlockingRejectedExecutionHandler()
     )
 
+    private val outgoingRps = 11.0
+    private val reqProcessingTime = 1000
+
     private val slidingWindow = SlidingWindowRateLimiter(
         11,
         Duration.ofSeconds(1),
@@ -55,7 +58,8 @@ class OrderPayer {
         val createdAt = System.currentTimeMillis()
 
         if (!slidingWindow.tick()) {
-            throw RateLimitedException(1)
+            val estimatedWaitingTime = (ceil(paymentExecutor.queue.size / outgoingRps) + reqProcessingTime).toLong()
+            throw RateLimitedException(createdAt + estimatedWaitingTime)
         }
 
         paymentExecutor.submit {
