@@ -12,6 +12,7 @@ import ru.quipy.common.utils.OngoingWindow
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
+import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
@@ -71,17 +72,17 @@ class PaymentExternalSystemAdapterImpl(
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
-        val baseDelay = 100 // ms
-        val maxDelay: Long = 16000 // ms
-        val highQuantileProcessingTime = 2000 // ms
+        val baseDelay = 100L // ms
+        val maxDelay = 16000L // ms
+        val highQuantileProcessingTime = 6000L // ms
 
         repeat(5) { attempt ->
             try {
                 ongoingWindow.acquire()
                 rateLimiter.tickBlocking()
 
-                if (deadline < now() + highQuantileProcessingTime) {
-                    throw ShouldRetryException(now() + highQuantileProcessingTime)
+                if (deadline < now() + requestAverageProcessingTime.toMillis()) {
+                    throw ShouldRetryException(now() + requestAverageProcessingTime.toMillis())
                 }
 
                 val request = Request.Builder().run {
@@ -91,7 +92,7 @@ class PaymentExternalSystemAdapterImpl(
 
                 val clientWithTimeout = client
                     .newBuilder()
-                    .callTimeout(Duration.ofMillis(deadline - now()))
+                    .callTimeout(Duration.ofMillis(highQuantileProcessingTime))
                     .build()
 
                 clientWithTimeout
@@ -140,6 +141,10 @@ class PaymentExternalSystemAdapterImpl(
 
                     is ShouldRetryException -> {
                         throw e
+                    }
+
+                    is InterruptedIOException -> {
+                        throw ShouldRetryException(now() + requestAverageProcessingTime.toMillis())
                     }
 
                     else -> {
