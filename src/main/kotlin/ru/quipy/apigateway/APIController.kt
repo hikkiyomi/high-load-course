@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
+import ru.quipy.payments.logic.PaymentMetrics
 import ru.quipy.payments.logic.ShouldRetryException
 import java.util.*
 
@@ -21,6 +22,9 @@ class APIController {
 
     @Autowired
     private lateinit var orderPayer: OrderPayer
+
+    @Autowired
+    private lateinit var paymentMetrics: PaymentMetrics
 
     @PostMapping("/users")
     fun createUser(@RequestBody req: CreateUserRequest): User {
@@ -70,6 +74,7 @@ class APIController {
             return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
         }
         catch (e: ShouldRetryException) {
+            paymentMetrics.metricSentWithRetryAfterInc()
             logger.warn("retrying for $orderId")
 
             return ResponseEntity

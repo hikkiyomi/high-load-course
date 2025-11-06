@@ -23,6 +23,7 @@ interface PaymentExternalSystemAdapter {
         paymentStartedAt: Long,
         deadline: Long,
         callback: (Long) -> Unit,
+        onRetry: () -> Unit,
     )
 
     fun name(): String

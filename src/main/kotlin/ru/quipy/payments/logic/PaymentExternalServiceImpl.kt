@@ -16,6 +16,7 @@ import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.TimeUnit
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.random.Random
@@ -59,6 +60,7 @@ class PaymentExternalSystemAdapterImpl(
         paymentStartedAt: Long,
         deadline: Long,
         callback: (Long) -> Unit,
+        onRetry: () -> Unit,
     ) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
 
@@ -74,15 +76,17 @@ class PaymentExternalSystemAdapterImpl(
 
         val baseDelay = 100L // ms
         val maxDelay = 16000L // ms
-        val highQuantileProcessingTime = 6000L // ms
+        val quantileProcessingTime = 1700L // ms
 
-        repeat(5) { attempt ->
+        repeat(8) { attempt ->
+            var shouldRetry = false
+
             try {
                 ongoingWindow.acquire()
                 rateLimiter.tickBlocking()
 
-                if (deadline < now() + requestAverageProcessingTime.toMillis()) {
-                    throw ShouldRetryException(now() + requestAverageProcessingTime.toMillis())
+                if (deadline < now() + quantileProcessingTime) {
+                    throw ShouldRetryException(now() + quantileProcessingTime)
                 }
 
                 val request = Request.Builder().run {
@@ -92,7 +96,7 @@ class PaymentExternalSystemAdapterImpl(
 
                 val clientWithTimeout = client
                     .newBuilder()
-                    .callTimeout(Duration.ofMillis(highQuantileProcessingTime))
+                    .callTimeout(quantileProcessingTime, TimeUnit.MILLISECONDS)
                     .build()
 
                 clientWithTimeout
@@ -128,6 +132,8 @@ class PaymentExternalSystemAdapterImpl(
                             callback(now())
                             return
                         }
+
+                        shouldRetry = true
                     }
             } catch (e: Exception) {
                 when (e) {
@@ -144,7 +150,7 @@ class PaymentExternalSystemAdapterImpl(
                     }
 
                     is InterruptedIOException -> {
-                        throw ShouldRetryException(now() + requestAverageProcessingTime.toMillis())
+                        shouldRetry = true
                     }
 
                     else -> {
@@ -157,17 +163,22 @@ class PaymentExternalSystemAdapterImpl(
                 }
 
                 callback(now())
-                return
             } finally {
                 ongoingWindow.release()
             }
 
+            if (!shouldRetry) {
+                return
+            }
+
             val backoff = baseDelay * (2.0.pow(attempt)).toLong()
             val cappedBackoff = min(backoff, maxDelay)
-            val jittered = Random.nextLong(0, cappedBackoff)
+            val jittered = Random.nextLong(baseDelay, cappedBackoff + 1)
 
             logger.warn("transaction $transactionId, payment $paymentId, attempt $attempt, going for delay $jittered")
             runBlocking { delay(jittered) }
+
+            onRetry()
         }
 
         paymentESService.update(paymentId) {
