@@ -44,11 +44,11 @@ class OrderPayer {
         CallerBlockingRejectedExecutionHandler()
     )
 
-    private val outgoingRps = 10.0
-    private val reqProcessingTime = 2000
+    private val outgoingRps = 8.0
+    private val reqProcessingTime = 1700L // ms
 
     private val slidingWindow = SlidingWindowRateLimiter(
-        10,
+        outgoingRps.toLong(),
         Duration.ofSeconds(1),
     )
 

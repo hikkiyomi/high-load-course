@@ -15,14 +15,22 @@ class PaymentSystemImpl(
 
     override fun submitPaymentRequest(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         for (account in paymentAccounts) {
+            val callback = { timestamp: Long ->
+                paymentMetrics.observeRequestDuration(timestamp - paymentStartedAt)
+            }
+
+            val onRetry = {
+                paymentMetrics.metricRetriesCounterInc()
+            }
+
             account.performPaymentAsync(
                 paymentId,
                 amount,
                 paymentStartedAt,
                 deadline,
-            ) { timestamp ->
-                paymentMetrics.observeRequestDuration(timestamp - paymentStartedAt)
-            }
+                callback,
+                onRetry,
+            )
         }
     }
 }
