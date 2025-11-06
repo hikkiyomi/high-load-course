@@ -5,6 +5,7 @@ import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
@@ -17,6 +18,7 @@ import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.random.Random
@@ -45,7 +47,10 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
-    private val client = OkHttpClient.Builder().build()
+    private val client = OkHttpClient
+        .Builder()
+        .protocols(listOf(Protocol.H2_PRIOR_KNOWLEDGE))
+        .build()
 
     private val rateLimiter = SlidingWindowRateLimiter(
         rateLimitPerSec.toLong(),
@@ -76,7 +81,7 @@ class PaymentExternalSystemAdapterImpl(
 
         val baseDelay = 100L // ms
         val maxDelay = 16000L // ms
-        val quantileProcessingTime = 1700L // ms
+        val quantileProcessingTime = 2000L // ms
 
         repeat(8) { attempt ->
             var shouldRetry = false
@@ -89,7 +94,11 @@ class PaymentExternalSystemAdapterImpl(
                     throw ShouldRetryException(now() + quantileProcessingTime)
                 }
 
+                val requestDeadline = now() + quantileProcessingTime
+
                 val request = Request.Builder().run {
+                    header("deadline", "$requestDeadline")
+                    header("timeout", "$quantileProcessingTime")
                     url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
                     post(emptyBody)
                 }.build()
@@ -99,42 +108,47 @@ class PaymentExternalSystemAdapterImpl(
                     .callTimeout(quantileProcessingTime, TimeUnit.MILLISECONDS)
                     .build()
 
-                clientWithTimeout
-                    .newCall(request)
-                    .execute()
-                    .use { response ->
-                        val body = try {
-                            mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
-                        } catch (e: Exception) {
-                            logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
-                            ExternalSysResponse(transactionId.toString(), paymentId.toString(),false, e.message)
-                        }
+                val call = clientWithTimeout.newCall(request)
 
-                        logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}, code: ${response.code}")
-
-                        if (
-                            !body.result &&
-                            body.message?.contains("Temporary error") == false &&
-                            response.code != 429 &&
-                            response.code !in 500..599
-                        ) {
-                            callback(now())
-                            return
-                        }
-
-                        if (body.result) {
-                            // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
-                            // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
-                            paymentESService.update(paymentId) {
-                                it.logProcessing(true, now(), transactionId, reason = body.message)
+                try {
+                    call
+                        .execute()
+                        .use { response ->
+                            val body = try {
+                                mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
+                            } catch (e: Exception) {
+                                logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
+                                ExternalSysResponse(transactionId.toString(), paymentId.toString(),false, e.message)
                             }
 
-                            callback(now())
-                            return
-                        }
+                            logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}, code: ${response.code}")
 
-                        shouldRetry = true
-                    }
+                            if (
+                                !body.result &&
+                                body.message?.contains("Temporary error") == false &&
+                                response.code != 429 &&
+                                response.code !in 500..599
+                            ) {
+                                callback(now())
+                                return
+                            }
+
+                            if (body.result) {
+                                // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
+                                // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
+                                paymentESService.update(paymentId) {
+                                    it.logProcessing(true, now(), transactionId, reason = body.message)
+                                }
+
+                                callback(now())
+                                return
+                            }
+
+                            shouldRetry = true
+                        }
+                } finally {
+                    call.cancel()
+                }
             } catch (e: Exception) {
                 when (e) {
                     is SocketTimeoutException -> {
