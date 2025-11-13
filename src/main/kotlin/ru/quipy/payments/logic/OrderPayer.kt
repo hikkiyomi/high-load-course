@@ -35,8 +35,8 @@ class OrderPayer {
     private lateinit var paymentService: PaymentService
 
     private val paymentExecutor = ThreadPoolExecutor(
-        16,
-        16,
+        50,
+        50,
         0L,
         TimeUnit.MILLISECONDS,
         LinkedBlockingQueue(8_000),
@@ -44,8 +44,8 @@ class OrderPayer {
         CallerBlockingRejectedExecutionHandler()
     )
 
-    private val outgoingRps = 8.0
-    private val reqProcessingTime = 1700L // ms
+    private val outgoingRps = 100.0
+    private val reqProcessingTime = 500L // ms
 
     private val slidingWindow = SlidingWindowRateLimiter(
         outgoingRps.toLong(),

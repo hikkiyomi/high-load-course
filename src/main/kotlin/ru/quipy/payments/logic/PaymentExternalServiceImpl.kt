@@ -76,7 +76,6 @@ class PaymentExternalSystemAdapterImpl(
 
         val baseDelay = 100L // ms
         val maxDelay = 16000L // ms
-        val quantileProcessingTime = 1700L // ms
 
         repeat(8) { attempt ->
             var shouldRetry = false
@@ -85,8 +84,8 @@ class PaymentExternalSystemAdapterImpl(
                 ongoingWindow.acquire()
                 rateLimiter.tickBlocking()
 
-                if (deadline < now() + quantileProcessingTime) {
-                    throw ShouldRetryException(now() + quantileProcessingTime)
+                if (deadline < now() + requestAverageProcessingTime.toMillis()) {
+                    throw ShouldRetryException(now() + requestAverageProcessingTime.toMillis())
                 }
 
                 val request = Request.Builder().run {
@@ -96,7 +95,7 @@ class PaymentExternalSystemAdapterImpl(
 
                 val clientWithTimeout = client
                     .newBuilder()
-                    .callTimeout(quantileProcessingTime, TimeUnit.MILLISECONDS)
+                    .callTimeout(requestAverageProcessingTime.toMillis(), TimeUnit.MILLISECONDS)
                     .build()
 
                 clientWithTimeout
