@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
@@ -45,7 +47,10 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
-    private val client = OkHttpClient.Builder().build()
+    private val client = OkHttpClient.Builder()
+        .connectionPool(ConnectionPool(150, 10000, TimeUnit.MILLISECONDS))
+        .protocols(listOf(Protocol.H2_PRIOR_KNOWLEDGE))
+        .build()
 
     private val rateLimiter = SlidingWindowRateLimiter(
         rateLimitPerSec.toLong(),
@@ -76,7 +81,7 @@ class PaymentExternalSystemAdapterImpl(
 
         val baseDelay = 100L // ms
         val maxDelay = 16000L // ms
-        val quantileProcessingTime = 1700L // ms
+        val quantileProcessingTime = 3000 // ms
 
         repeat(8) { attempt ->
             var shouldRetry = false
@@ -96,7 +101,7 @@ class PaymentExternalSystemAdapterImpl(
 
                 val clientWithTimeout = client
                     .newBuilder()
-                    .callTimeout(quantileProcessingTime, TimeUnit.MILLISECONDS)
+                    .callTimeout(quantileProcessingTime.toLong(), TimeUnit.MILLISECONDS)
                     .build()
 
                 clientWithTimeout
