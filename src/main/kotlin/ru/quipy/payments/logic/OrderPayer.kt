@@ -45,7 +45,7 @@ class OrderPayer {
     )
 
     private val outgoingRps = 100.0
-    private val reqProcessingTime = 500L // ms
+    private val reqProcessingTime = 3000L // ms
 
     private val slidingWindow = SlidingWindowRateLimiter(
         outgoingRps.toLong(),
