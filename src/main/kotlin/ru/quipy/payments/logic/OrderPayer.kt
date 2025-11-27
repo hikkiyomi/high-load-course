@@ -2,6 +2,7 @@ package ru.quipy.payments.logic
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -39,14 +40,6 @@ class OrderPayer {
         CallerBlockingRejectedExecutionHandler()
     )
 
-    // private val outgoingRps = 1100.0
-    // private val reqProcessingTime = 10000L // ms
-
-    // private val slidingWindow = SlidingWindowRateLimiter(
-    //     outgoingRps.toLong(),
-    //     Duration.ofSeconds(1),
-    // )
-
     suspend fun processPayment(
         orderId: UUID,
         amount: Int,
@@ -54,14 +47,6 @@ class OrderPayer {
         deadline: Long,
     ): Long {
         val createdAt = System.currentTimeMillis()
-
-        // if (!slidingWindow.tick()) {
-        //     val estimatedWaitingTime = (ceil(paymentExecutor.queue.size / outgoingRps) + reqProcessingTime).toLong()
-
-        //     if (createdAt + estimatedWaitingTime > deadline) {
-        //         throw ShouldRetryException(createdAt + estimatedWaitingTime)
-        //     }
-        // }
 
         val createdEvent = paymentESService.create {
             it.create(
