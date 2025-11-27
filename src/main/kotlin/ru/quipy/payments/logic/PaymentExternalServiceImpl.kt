@@ -62,6 +62,11 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
+    private val slidingWindow = SlidingWindowRateLimiter(
+        rateLimitPerSec.toLong(),
+        Duration.ofSeconds(1),
+    )
+
     @OptIn(DelicateCoroutinesApi::class)
     private val scope = CoroutineScope(newFixedThreadPoolContext(250, "payment-external-service"))
 
