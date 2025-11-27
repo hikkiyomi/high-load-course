@@ -1,7 +1,5 @@
 package ru.quipy.apigateway
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -27,7 +25,7 @@ class APIController {
     private lateinit var paymentMetrics: PaymentMetrics
 
     @PostMapping("/users")
-    fun createUser(@RequestBody req: CreateUserRequest): User {
+    suspend fun createUser(@RequestBody req: CreateUserRequest): User {
         return User(UUID.randomUUID(), req.name)
     }
 
@@ -36,7 +34,7 @@ class APIController {
     data class User(val id: UUID, val name: String)
 
     @PostMapping("/orders")
-    fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): Order {
+    suspend fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): Order {
         val order = Order(
             UUID.randomUUID(),
             userId,
@@ -44,7 +42,13 @@ class APIController {
             OrderStatus.COLLECTING,
             price,
         )
-        return orderRepository.save(order)
+
+        return try {
+            orderRepository.save(order)
+        } catch (e: Exception) {
+            logger.error("??? ${e.message}")
+            throw e
+        }
     }
 
     data class Order(
@@ -69,7 +73,13 @@ class APIController {
             it
         } ?: throw IllegalArgumentException("No such order $orderId")
 
-        val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
+        val createdAt = try {
+            orderPayer.processPayment(orderId, order.price, paymentId, deadline)
+        } catch (e: Exception) {
+            logger.error("lol ${e.message}")
+            return ResponseEntity.internalServerError().build()
+        }
+
         return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
     }
 

@@ -1,9 +1,12 @@
 package ru.quipy.payments.logic
 
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.newFixedThreadPoolContext
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -40,6 +43,15 @@ class OrderPayer {
         CallerBlockingRejectedExecutionHandler()
     )
 
+    private val handler = CoroutineExceptionHandler { _, exception ->
+        println("aboba: $exception")
+    }
+
+    @OptIn(DelicateCoroutinesApi::class)
+    private val scope = CoroutineScope(
+        newFixedThreadPoolContext(250, "order-payer") + handler
+    )
+
     suspend fun processPayment(
         orderId: UUID,
         amount: Int,
@@ -48,16 +60,22 @@ class OrderPayer {
     ): Long {
         val createdAt = System.currentTimeMillis()
 
-        val createdEvent = paymentESService.create {
-            it.create(
-                paymentId,
-                orderId,
-                amount
-            )
-        }
-        logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
+        scope.launch {
+            val createdEvent = paymentESService.create {
+                it.create(
+                    paymentId,
+                    orderId,
+                    amount
+                )
+            }
+            logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
 
-        paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
+            try {
+                paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
+            } catch (e: Exception) {
+                logger.error("HOW ${e.message}")
+            }
+        }
 
         return createdAt
     }
