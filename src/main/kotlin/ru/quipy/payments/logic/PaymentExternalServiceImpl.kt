@@ -105,6 +105,7 @@ class PaymentExternalSystemAdapterImpl(
                 .accept(MediaType.APPLICATION_JSON)
                 .retrieve()
                 .toEntity(String::class.java)
+                .transformDeferred(RateLimiterOperator.of(rateLimiter))
                 .awaitSingle()
 
             val body = try {
