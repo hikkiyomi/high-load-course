@@ -12,7 +12,7 @@ class RateLimiterConfig {
     fun webClientRateLimiter(): RateLimiter {
         return RateLimiter.of("webclient", RateLimiterConfig.custom()
             .limitRefreshPeriod(Duration.ofMillis(1000))
-            .limitForPeriod(1000)
+            .limitForPeriod(1100)
             .build()
         )
     }
