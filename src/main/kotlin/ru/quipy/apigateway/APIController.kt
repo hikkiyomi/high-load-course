@@ -46,6 +46,8 @@ class APIController {
 
     @PostMapping("/users")
     suspend fun createUser(@RequestBody req: CreateUserRequest): ResponseEntity<User> {
+        userRateLimiter.tickSuspend()
+
         return ResponseEntity.ok(User(UUID.randomUUID(), req.name))
     }
 
@@ -55,6 +57,7 @@ class APIController {
 
     @PostMapping("/orders")
     suspend fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): ResponseEntity<Order> {
+        orderRateLimiter.tickSuspend()
 
         val order = Order(
             UUID.randomUUID(),
@@ -83,6 +86,8 @@ class APIController {
 
     @PostMapping("/orders/{orderId}/payment")
     suspend fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): ResponseEntity<PaymentSubmissionDto> {
+        orderRateLimiter.tickSuspend()
+
         val paymentId = UUID.randomUUID()
 
         val order = orderRepository.findById(orderId)?.let {
