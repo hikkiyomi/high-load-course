@@ -46,15 +46,6 @@ class APIController {
 
     @PostMapping("/users")
     suspend fun createUser(@RequestBody req: CreateUserRequest): ResponseEntity<User> {
-        if (!userRateLimiter.tick()) {
-            val now = System.currentTimeMillis()
-
-            return ResponseEntity
-                .status(HttpStatus.TOO_MANY_REQUESTS)
-                .header("Retry-After", "${now + avgProcessingTime}")
-                .build()
-        }
-
         return ResponseEntity.ok(User(UUID.randomUUID(), req.name))
     }
 
@@ -64,14 +55,6 @@ class APIController {
 
     @PostMapping("/orders")
     suspend fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): ResponseEntity<Order> {
-        if (!orderRateLimiter.tick()) {
-            val now = System.currentTimeMillis()
-
-            return ResponseEntity
-                .status(HttpStatus.TOO_MANY_REQUESTS)
-                .header("Retry-After", "${now + avgProcessingTime}")
-                .build()
-        }
 
         val order = Order(
             UUID.randomUUID(),
@@ -81,12 +64,7 @@ class APIController {
             price,
         )
 
-        return try {
-            ResponseEntity.ok(orderRepository.save(order))
-        } catch (e: Exception) {
-            logger.error("??? ${e.message}")
-            throw e
-        }
+        return ResponseEntity.ok(orderRepository.save(order))
     }
 
     data class Order(
@@ -105,27 +83,14 @@ class APIController {
 
     @PostMapping("/orders/{orderId}/payment")
     suspend fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): ResponseEntity<PaymentSubmissionDto> {
-        if (!processRateLimiter.tick()) {
-            val now = System.currentTimeMillis()
-
-            return ResponseEntity
-                .status(HttpStatus.TOO_MANY_REQUESTS)
-                .header("Retry-After", "${now + avgProcessingTime}")
-                .build()
-        }
-
         val paymentId = UUID.randomUUID()
+
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
             it
         } ?: throw IllegalArgumentException("No such order $orderId")
 
-        val createdAt = try {
-            orderPayer.processPayment(orderId, order.price, paymentId, deadline)
-        } catch (e: Exception) {
-            logger.error("lol ${e.message}")
-            return ResponseEntity.internalServerError().build()
-        }
+        val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
 
         return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
     }
