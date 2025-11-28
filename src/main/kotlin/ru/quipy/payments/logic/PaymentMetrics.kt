@@ -2,6 +2,7 @@ package ru.quipy.payments.logic
 
 import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.DistributionSummary
+import io.micrometer.core.instrument.Gauge
 import io.micrometer.core.instrument.MeterRegistry
 import org.springframework.stereotype.Component
 

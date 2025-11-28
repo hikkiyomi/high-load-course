@@ -1,25 +1,24 @@
 package ru.quipy.payments.logic
 
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.newFixedThreadPoolContext
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
 import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
-import ru.quipy.common.utils.CompositeRateLimiter
-import ru.quipy.common.utils.LeakingBucketRateLimiter
 import ru.quipy.common.utils.NamedThreadFactory
-import ru.quipy.common.utils.SlidingWindowRateLimiter
-import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
-import java.awt.Composite
-import java.time.Duration
 import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
-import kotlin.math.ceil
-
 
 @Service
 class OrderPayer {
@@ -44,26 +43,24 @@ class OrderPayer {
         CallerBlockingRejectedExecutionHandler()
     )
 
-    private val outgoingRps = 100.0
-    private val reqProcessingTime = 3000L // ms
+    private val handler = CoroutineExceptionHandler { _, exception ->
+        println("aboba: $exception")
+    }
 
-    private val slidingWindow = SlidingWindowRateLimiter(
-        outgoingRps.toLong(),
-        Duration.ofSeconds(1),
+    @OptIn(DelicateCoroutinesApi::class)
+    private val scope = CoroutineScope(
+        newFixedThreadPoolContext(250, "order-payer") + handler
     )
 
-    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
+    suspend fun processPayment(
+        orderId: UUID,
+        amount: Int,
+        paymentId: UUID,
+        deadline: Long,
+    ): Long {
         val createdAt = System.currentTimeMillis()
 
-        if (!slidingWindow.tick()) {
-            val estimatedWaitingTime = (ceil(paymentExecutor.queue.size / outgoingRps) + reqProcessingTime).toLong()
-
-            if (createdAt + estimatedWaitingTime > deadline) {
-                throw ShouldRetryException(createdAt + estimatedWaitingTime)
-            }
-        }
-
-        val future = paymentExecutor.submit {
+        scope.launch {
             val createdEvent = paymentESService.create {
                 it.create(
                     paymentId,
@@ -73,14 +70,10 @@ class OrderPayer {
             }
             logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
 
-            paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
-        }
-
-        try {
-            future.get()
-        } catch (e: Exception) {
-            e.cause?.let {
-                throw it
+            try {
+                paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
+            } catch (e: Exception) {
+                logger.error("HOW ${e.message}")
             }
         }
 

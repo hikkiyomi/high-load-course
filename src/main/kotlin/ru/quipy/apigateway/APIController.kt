@@ -6,10 +6,11 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
+import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
 import ru.quipy.payments.logic.PaymentMetrics
-import ru.quipy.payments.logic.ShouldRetryException
+import java.time.Duration
 import java.util.*
 
 @RestController
@@ -26,9 +27,11 @@ class APIController {
     @Autowired
     private lateinit var paymentMetrics: PaymentMetrics
 
+    private val avgProcessingTime = 10000 // ms
+
     @PostMapping("/users")
-    fun createUser(@RequestBody req: CreateUserRequest): User {
-        return User(UUID.randomUUID(), req.name)
+    suspend fun createUser(@RequestBody req: CreateUserRequest): ResponseEntity<User> {
+        return ResponseEntity.ok(User(UUID.randomUUID(), req.name))
     }
 
     data class CreateUserRequest(val name: String, val password: String)
@@ -36,7 +39,7 @@ class APIController {
     data class User(val id: UUID, val name: String)
 
     @PostMapping("/orders")
-    fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): Order {
+    suspend fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): ResponseEntity<Order> {
         val order = Order(
             UUID.randomUUID(),
             userId,
@@ -44,7 +47,8 @@ class APIController {
             OrderStatus.COLLECTING,
             price,
         )
-        return orderRepository.save(order)
+
+        return ResponseEntity.ok(orderRepository.save(order))
     }
 
     data class Order(
@@ -62,26 +66,17 @@ class APIController {
     }
 
     @PostMapping("/orders/{orderId}/payment")
-    fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): ResponseEntity<PaymentSubmissionDto> {
+    suspend fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): ResponseEntity<PaymentSubmissionDto> {
         val paymentId = UUID.randomUUID()
+
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
             it
         } ?: throw IllegalArgumentException("No such order $orderId")
 
-        try {
-            val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
-            return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
-        }
-        catch (e: ShouldRetryException) {
-            paymentMetrics.metricSentWithRetryAfterInc()
-            logger.warn("retrying for $orderId")
+        val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
 
-            return ResponseEntity
-                .status(HttpStatus.TOO_MANY_REQUESTS)
-                .header("Retry-After", "${e.retryAfter}")
-                .build()
-        }
+        return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
     }
 
     class PaymentSubmissionDto(
