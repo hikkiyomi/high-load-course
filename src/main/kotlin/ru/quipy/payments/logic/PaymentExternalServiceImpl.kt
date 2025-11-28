@@ -99,13 +99,14 @@ class PaymentExternalSystemAdapterImpl(
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
         try {
+            slidingWindow.tickSuspend()
+
             val response = client.post()
                 .uri("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_JSON)
                 .retrieve()
                 .toEntity(String::class.java)
-                .transformDeferred(RateLimiterOperator.of(rateLimiter))
                 .awaitSingle()
 
             val body = try {
