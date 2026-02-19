@@ -23,6 +23,7 @@
         <resilience4jVersion>2.2.0</resilience4jVersion>
         <json-datatype.version>2.9.8</json-datatype.version>
         <caffeine.version>3.1.8</caffeine.version>
+        <ktor.version>3.4.0</ktor.version>
     </properties>
 
 	<dependencies>
@@ -67,6 +68,26 @@
             <version>${jetty.version}</version>
         </dependency>
 
+        <dependency>
+            <groupId>io.ktor</groupId>
+            <artifactId>ktor-client-core-jvm</artifactId>
+            <version>${ktor.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.ktor</groupId>
+            <artifactId>ktor-client-okhttp-jvm</artifactId>
+            <version>${ktor.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.ktor</groupId>
+            <artifactId>ktor-client-content-negotiation-jvm</artifactId>
+            <version>${ktor.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.ktor</groupId>
+            <artifactId>ktor-serialization-jackson-jvm</artifactId>
+            <version>${ktor.version}</version>
+        </dependency>
 <!--        <dependency>-->
 <!--            <groupId>org.eclipse.jetty</groupId>-->
 <!--            <artifactId>jetty-alpn-server</artifactId>-->

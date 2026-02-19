@@ -1,5 +1,10 @@
 package ru.quipy.payments.logic
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.newFixedThreadPoolContext
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -34,56 +39,37 @@ class OrderPayer {
     @Autowired
     private lateinit var paymentService: PaymentService
 
-    private val paymentExecutor = ThreadPoolExecutor(
-        50,
-        50,
-        0L,
-        TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(8_000),
-        NamedThreadFactory("payment-submission-executor"),
-        CallerBlockingRejectedExecutionHandler()
-    )
+    // private val outgoingRps = 100.0
+    // private val reqProcessingTime = 3000L // ms
 
-    private val outgoingRps = 100.0
-    private val reqProcessingTime = 3000L // ms
+    // private val slidingWindow = SlidingWindowRateLimiter(
+    //     outgoingRps.toLong(),
+    //     Duration.ofSeconds(1),
+    // )
 
-    private val slidingWindow = SlidingWindowRateLimiter(
-        outgoingRps.toLong(),
-        Duration.ofSeconds(1),
-    )
+    private val pool = newFixedThreadPoolContext(500, "pool")
 
-    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
+    suspend fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
 
-        if (!slidingWindow.tick()) {
-            val estimatedWaitingTime = (ceil(paymentExecutor.queue.size / outgoingRps) + reqProcessingTime).toLong()
+        return withContext(pool) {
+            try {
+                val createdEvent = paymentESService.create {
+                    it.create(
+                        paymentId,
+                        orderId,
+                        amount
+                    )
+                }
 
-            if (createdAt + estimatedWaitingTime > deadline) {
-                throw ShouldRetryException(createdAt + estimatedWaitingTime)
+                logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
+                paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
+
+                createdAt
+            } catch (e: Exception) {
+                logger.error("something something failed: ${e.message}")
+                throw e
             }
         }
-
-        val future = paymentExecutor.submit {
-            val createdEvent = paymentESService.create {
-                it.create(
-                    paymentId,
-                    orderId,
-                    amount
-                )
-            }
-            logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
-
-            paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
-        }
-
-        try {
-            future.get()
-        } catch (e: Exception) {
-            e.cause?.let {
-                throw it
-            }
-        }
-
-        return createdAt
     }
 }

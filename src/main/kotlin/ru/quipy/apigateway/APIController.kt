@@ -1,5 +1,7 @@
 package ru.quipy.apigateway
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -36,7 +38,7 @@ class APIController {
     data class User(val id: UUID, val name: String)
 
     @PostMapping("/orders")
-    fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): Order {
+    suspend fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): Order {
         val order = Order(
             UUID.randomUUID(),
             userId,
@@ -44,7 +46,10 @@ class APIController {
             OrderStatus.COLLECTING,
             price,
         )
-        return orderRepository.save(order)
+
+        return withContext(Dispatchers.IO) {
+            orderRepository.save(order)
+        }
     }
 
     data class Order(
@@ -62,19 +67,24 @@ class APIController {
     }
 
     @PostMapping("/orders/{orderId}/payment")
-    fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): ResponseEntity<PaymentSubmissionDto> {
+    suspend fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): ResponseEntity<PaymentSubmissionDto> {
         val paymentId = UUID.randomUUID()
-        val order = orderRepository.findById(orderId)?.let {
-            orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
-            it
+
+        val order = withContext(Dispatchers.IO) {
+            orderRepository.findById(orderId)?.let {
+                orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
+                it
+            }
         } ?: throw IllegalArgumentException("No such order $orderId")
 
         try {
             val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
             return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
-        }
-        catch (e: ShouldRetryException) {
-            paymentMetrics.metricSentWithRetryAfterInc()
+        } catch (e: ShouldRetryException) {
+            withContext(Dispatchers.IO) {
+                paymentMetrics.metricSentWithRetryAfterInc()
+            }
+
             logger.warn("retrying for $orderId")
 
             return ResponseEntity
