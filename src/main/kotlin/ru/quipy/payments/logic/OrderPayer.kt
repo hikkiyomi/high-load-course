@@ -54,17 +54,7 @@ class OrderPayer {
 
         return withContext(pool) {
             try {
-                val createdEvent = paymentESService.create {
-                    it.create(
-                        paymentId,
-                        orderId,
-                        amount
-                    )
-                }
-
-                logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
                 paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
-
                 createdAt
             } catch (e: Exception) {
                 logger.error("something something failed: ${e.message}")

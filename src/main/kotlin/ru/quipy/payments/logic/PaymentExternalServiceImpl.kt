@@ -2,26 +2,27 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import io.ktor.client.*
-import io.ktor.client.call.*
-import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.request.*
-import io.ktor.serialization.jackson.*
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
+import io.ktor.client.HttpClient
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.newFixedThreadPoolContext
+import kotlinx.coroutines.future.await
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.withContext
+import okhttp3.ConnectionPool
+import okhttp3.OkHttpClient
 import okhttp3.Protocol
+import okhttp3.Request
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
+import ru.quipy.common.utils.OngoingWindow
 import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
+import java.net.URI
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.TimeUnit
@@ -43,7 +44,7 @@ class PaymentExternalSystemAdapterImpl(
     companion object {
         val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
 
-        val emptyBody = RequestBody.create(null, ByteArray(0))
+        val emptyBody = HttpRequest.BodyPublishers.noBody()
         val mapper = ObjectMapper().registerKotlinModule()
     }
 
@@ -53,30 +54,22 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
-    private val client = HttpClient(io.ktor.client.engine.okhttp.OkHttp) {
-        engine {
-            config {
-                connectionPool(okhttp3.ConnectionPool(4000, 10000, TimeUnit.MILLISECONDS))
-                protocols(listOf(Protocol.H2_PRIOR_KNOWLEDGE))
-                callTimeout(1000, TimeUnit.MILLISECONDS)
-            }
-        }
-        install(io.ktor.client.plugins.contentnegotiation.ContentNegotiation) {
-            jackson {
-                registerKotlinModule()
-            }
-        }
-        install(HttpTimeout) {
-            requestTimeoutMillis = 1000
-        }
-    }
+    private val client = OkHttpClient.Builder()
+        .connectionPool(ConnectionPool(150, 10000, TimeUnit.MILLISECONDS))
+        .protocols(listOf(Protocol.H2_PRIOR_KNOWLEDGE))
+        .build()
+
+    private val httpClient = java.net.http.HttpClient.newBuilder()
+        .version(java.net.http.HttpClient.Version.HTTP_2)
+        .connectTimeout(Duration.ofSeconds(1))
+        .build()
 
     private val rateLimiter = SlidingWindowRateLimiter(
         rateLimitPerSec.toLong(),
         Duration.ofSeconds(1),
     )
 
-    private val semaphore = Semaphore(parallelRequests)
+    private val semaphore: Semaphore = Semaphore(parallelRequests)
 
     override suspend fun performPaymentAsync(
         paymentId: UUID,
@@ -90,48 +83,78 @@ class PaymentExternalSystemAdapterImpl(
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
-        semaphore.withPermit {
-            try {
-                withContext(Dispatchers.IO) {
+        val baseDelay = 100L // ms
+        val maxDelay = 16000L // ms
+        val quantileProcessingTime = 1000 // ms
+
+        repeat(8) { attempt ->
+            var shouldRetry = false
+
+            semaphore.withPermit {
+                try {
                     rateLimiter.tickSuspend()
-                }
 
-                val url = "http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"
-
-                val response = client.post(url) {
-                    setBody(ByteArray(0))
-                }
-
-                val responseBody = response.body<String>()
-                val body = try {
-                    mapper.readValue(responseBody, ExternalSysResponse::class.java)
-                } catch (e: Exception) {
-                    logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.status.value}, reason: ${responseBody}")
-                    ExternalSysResponse(transactionId.toString(), paymentId.toString(),false, e.message)
-                }
-
-                logger.warn("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}, code: ${response.status.value}")
-
-                // val isTemporaryError = body.message?.contains("Temporary error") == true
-                // val canRetry = response.status.value == 429 && response.status.value in 500..599
-
-                return@withPermit
-            } catch (e: Exception) {
-                when (e) {
-                    is io.ktor.client.plugins.HttpRequestTimeoutException,
-                    is org.springframework.web.context.request.async.AsyncRequestTimeoutException,
-                    is SocketTimeoutException -> {
-                        logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId", e)
+                    if (deadline < now() + quantileProcessingTime) {
+                        throw ShouldRetryException(now() + quantileProcessingTime)
                     }
 
-                    is ShouldRetryException,
-                    is CancellationException -> throw e
+                    val request =
+                        HttpRequest.newBuilder()
+                            .uri(
+                                URI.create(
+                                    "http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount"
+                                )
+                            )
+                            .POST(emptyBody)
+                            .timeout(Duration.ofSeconds(deadline - now()))
+                            .build()
 
-                    else -> {
-                        logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
+                    val response = httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
+
+                    try {
+                        mapper.readValue(response.body(), ExternalSysResponse::class.java)
+                    } catch (e: Exception) {
+                        logger.error(
+                            "[$accountName] [ERROR] txId=$transactionId payment=$paymentId code=${response.statusCode()} reason=${response.body()}"
+                        )
+                        ExternalSysResponse(
+                            transactionId.toString(),
+                            paymentId.toString(),
+                            false,
+                            e.message
+                        )
+                    }
+                } catch (e: Exception) {
+                    when (e) {
+                        is SocketTimeoutException -> {
+                            logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId", e)
+                        }
+
+                        is ShouldRetryException -> {
+                            throw e
+                        }
+
+                        is InterruptedIOException -> {
+                            shouldRetry = true
+                        }
+
+                        else -> {
+                            logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
+                        }
                     }
                 }
             }
+
+            if (!shouldRetry) {
+                return
+            }
+
+            val backoff = baseDelay * (2.0.pow(attempt)).toLong()
+            val cappedBackoff = min(backoff, maxDelay)
+            val jittered = Random.nextLong(baseDelay, cappedBackoff + 1)
+
+            logger.warn("transaction $transactionId, payment $paymentId, attempt $attempt, going for delay $jittered")
+            delay(jittered)
         }
     }
 
