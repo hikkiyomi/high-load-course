@@ -44,7 +44,6 @@ class PaymentExternalSystemAdapterImpl(
         }
     }
 
-
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
@@ -63,10 +62,10 @@ class PaymentExternalSystemAdapterImpl(
 
     private val semaphore: Semaphore = Semaphore(parallelRequests)
 
-    private val quantileProcessingTime = 200 // ms
+    private val quantileProcessingTime = 100 // ms
 
-    private val hedgeRequests = 2
-    private val hedgeTimeout = Duration.ofMillis(120)
+    private val hedgeRequests = 4
+    private val hedgeTimeout = Duration.ofMillis(20)
 
     private val warmupScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
