@@ -28,7 +28,7 @@ class APIController {
     private lateinit var orderPayer: OrderPayer
 
     private var rateLimiter = SlidingWindowRateLimiter(
-        rate = 5000,
+        rate = 100,
         window = Duration.ofSeconds(1),
     )
 
