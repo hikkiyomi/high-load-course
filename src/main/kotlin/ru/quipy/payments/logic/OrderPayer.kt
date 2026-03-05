@@ -1,6 +1,9 @@
 package ru.quipy.payments.logic
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.newFixedThreadPoolContext
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -34,32 +37,17 @@ class OrderPayer {
     }
 
     @Autowired
-    private lateinit var paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>
-
-    @Autowired
     private lateinit var paymentService: PaymentService
 
-    // private val outgoingRps = 100.0
-    // private val reqProcessingTime = 3000L // ms
-
-    // private val slidingWindow = SlidingWindowRateLimiter(
-    //     outgoingRps.toLong(),
-    //     Duration.ofSeconds(1),
-    // )
-
-    private val pool = newFixedThreadPoolContext(500, "pool")
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     suspend fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
 
-        return withContext(pool) {
-            try {
-                paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
-                createdAt
-            } catch (e: Exception) {
-                logger.error("something something failed: ${e.message}")
-                throw e
-            }
+        scope.launch {
+            paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
         }
+
+        return createdAt
     }
 }
