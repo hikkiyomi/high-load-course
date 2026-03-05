@@ -88,14 +88,6 @@ class PaymentExternalSystemAdapterImpl(
 
         val transactionId = UUID.randomUUID()
 
-        withContext(Dispatchers.IO) {
-            // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
-            // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
-            paymentESService.update(paymentId) {
-                it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
-            }
-        }
-
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
         semaphore.withPermit {
@@ -123,14 +115,6 @@ class PaymentExternalSystemAdapterImpl(
                 // val isTemporaryError = body.message?.contains("Temporary error") == true
                 // val canRetry = response.status.value == 429 && response.status.value in 500..599
 
-                withContext(Dispatchers.IO) {
-                    // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
-                    // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
-                    paymentESService.update(paymentId) {
-                        it.logProcessing(body.result, now(), transactionId, reason = body.message)
-                    }
-                }
-
                 return@withPermit
             } catch (e: Exception) {
                 when (e) {
@@ -138,12 +122,6 @@ class PaymentExternalSystemAdapterImpl(
                     is org.springframework.web.context.request.async.AsyncRequestTimeoutException,
                     is SocketTimeoutException -> {
                         logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId", e)
-
-                        withContext(Dispatchers.IO) {
-                            paymentESService.update(paymentId) {
-                                it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
-                            }
-                        }
                     }
 
                     is ShouldRetryException,
@@ -151,12 +129,6 @@ class PaymentExternalSystemAdapterImpl(
 
                     else -> {
                         logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
-
-                        withContext(Dispatchers.IO) {
-                            paymentESService.update(paymentId) {
-                                it.logProcessing(false, now(), transactionId, reason = e.message)
-                            }
-                        }
                     }
                 }
             }
