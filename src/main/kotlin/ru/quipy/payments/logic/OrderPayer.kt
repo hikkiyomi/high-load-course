@@ -41,7 +41,7 @@ class OrderPayer {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    suspend fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
+    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
 
         scope.launch {
