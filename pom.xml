@@ -88,6 +88,11 @@
             <artifactId>ktor-serialization-jackson-jvm</artifactId>
             <version>${ktor.version}</version>
         </dependency>
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-circuitbreaker</artifactId>
+            <version>${resilience4jVersion}</version>
+        </dependency>
 <!--        <dependency>-->
 <!--            <groupId>org.eclipse.jetty</groupId>-->
 <!--            <artifactId>jetty-alpn-server</artifactId>-->

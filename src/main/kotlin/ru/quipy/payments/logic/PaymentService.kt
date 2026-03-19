@@ -52,4 +52,5 @@ class ExternalSysResponse(
     val paymentId: String,
     val result: Boolean,
     val message: String? = null,
+    val throwable: Throwable?,
 )

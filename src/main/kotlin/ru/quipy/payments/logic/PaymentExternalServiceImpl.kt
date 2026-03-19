@@ -2,6 +2,7 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import io.github.resilience4j.circuitbreaker.CircuitBreaker
 import kotlinx.coroutines.*
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.selects.select
@@ -20,6 +21,7 @@ import java.net.http.HttpResponse
 import java.net.http.HttpTimeoutException
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.TimeUnit
 
 class ShouldRetryException(val retryAfter: Long)
     : Exception("Retry after $retryAfter timestamp.")
@@ -30,6 +32,7 @@ class PaymentExternalSystemAdapterImpl(
     private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
     private val paymentProviderHostPort: String,
     private val token: String,
+    private val circuitBreaker: CircuitBreaker,
 ) : PaymentExternalSystemAdapter {
 
     companion object {
@@ -64,7 +67,7 @@ class PaymentExternalSystemAdapterImpl(
 
     private val quantileProcessingTime = 100 // ms
 
-    private val hedgeRequests = 4
+    private val hedgeRequests = 0
     private val hedgeTimeout = Duration.ofMillis(20)
 
     private val warmupScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -85,39 +88,64 @@ class PaymentExternalSystemAdapterImpl(
             val transactionId = UUID.randomUUID()
             logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
 
-            val activeRequests = mutableListOf<Deferred<ExternalSysResponse>>()
+            var shouldContinueRunning = true
 
-            try {
-                val primary = async { doRequest(transactionId, paymentId, amount, deadline) }
-                activeRequests.add(primary)
-
-                repeat(hedgeRequests) {
-                    val remainingTime = deadline - now()
-
-                    if (quantileProcessingTime >= remainingTime) {
-                        return@repeat
-                    }
-
-                    val completed = withTimeoutOrNull(hedgeTimeout) {
-                        primary.await()
-                    }
-
-                    if (completed != null) {
-                        return@repeat
-                    }
-
-                    val hedge = async { doRequest(transactionId, paymentId, amount, deadline) }
-                    activeRequests.add(hedge)
+            while (shouldContinueRunning) {
+                if (!circuitBreaker.tryAcquirePermission()) {
+                    delay(10)
                 }
 
-                select {
-                    activeRequests.forEach { deferred ->
-                        deferred.onAwait { it }
+                val activeRequests = mutableListOf<Deferred<ExternalSysResponse>>()
+                val start = now()
+
+                try {
+                    val primary = async { doRequest(transactionId, paymentId, amount, deadline) }
+                    activeRequests.add(primary)
+
+                    repeat(hedgeRequests) {
+                        val remainingTime = deadline - now()
+
+                        if (quantileProcessingTime >= remainingTime) {
+                            return@repeat
+                        }
+
+                        val completed = withTimeoutOrNull(hedgeTimeout) {
+                            primary.await()
+                        }
+
+                        if (completed != null) {
+                            return@repeat
+                        }
+
+                        val hedge = async { doRequest(transactionId, paymentId, amount, deadline) }
+                        activeRequests.add(hedge)
                     }
-                }
-            } finally {
-                activeRequests.forEach {
-                    it.cancel()
+
+                    select {
+                        activeRequests.forEach { deferred ->
+                            deferred.onAwait {
+                                if (it.throwable != null) {
+                                    logger.error("[$accountName] caught error while processing. reporting to circuit breaker and retrying")
+                                    circuitBreaker.onError(
+                                        now() - start,
+                                        TimeUnit.MILLISECONDS,
+                                        it.throwable,
+                                    )
+                                } else {
+                                    logger.info("[$accountName] success while processing. reporting to circuit breaker")
+                                    circuitBreaker.onSuccess(
+                                        now() - start,
+                                        TimeUnit.MILLISECONDS,
+                                    )
+                                    shouldContinueRunning = false
+                                }
+                            }
+                        }
+                    }
+                } finally {
+                    activeRequests.forEach {
+                        it.cancel()
+                    }
                 }
             }
         }
@@ -145,7 +173,7 @@ class PaymentExternalSystemAdapterImpl(
                             )
                         )
                         .POST(emptyBody)
-                        .timeout(Duration.ofSeconds(deadline - now()))
+                        .timeout(Duration.ofSeconds(1))
                         .build()
 
                 val response = httpClient
@@ -164,6 +192,7 @@ class PaymentExternalSystemAdapterImpl(
                         paymentId.toString(),
                         false,
                         e.message,
+                        null,
                     )
                 }
             } catch (e: Exception) {
@@ -184,6 +213,14 @@ class PaymentExternalSystemAdapterImpl(
                         logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
                     }
                 }
+
+                return ExternalSysResponse(
+                    transactionId.toString(),
+                    paymentId.toString(),
+                    false,
+                    "caught exception",
+                    e,
+                )
             }
         }
 
@@ -192,6 +229,7 @@ class PaymentExternalSystemAdapterImpl(
             paymentId.toString(),
             true,
             "success",
+            null,
         )
     }
 
